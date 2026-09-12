@@ -1,7 +1,5 @@
 """The Synology DSM component."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
@@ -9,6 +7,8 @@ import logging
 
 from awesomeversion import AwesomeVersion
 from synology_dsm import SynologyDSM
+from synology_dsm.api.core.external_usb import SynoCoreExternalUSB
+from synology_dsm.api.core.hardware import SynoCoreHardware
 from synology_dsm.api.core.security import SynoCoreSecurity
 from synology_dsm.api.core.system import SynoCoreSystem
 from synology_dsm.api.core.upgrade import SynoCoreUpgrade
@@ -69,6 +69,7 @@ class SynoApi:
 
         # DSM APIs
         self.file_station: SynoFileStation | None = None
+        self.hardware: SynoCoreHardware | None = None
         self.information: SynoDSMInformation | None = None
         self.network: SynoDSMNetwork | None = None
         self.photos: SynoPhotos | None = None
@@ -78,10 +79,12 @@ class SynoApi:
         self.system: SynoCoreSystem | None = None
         self.upgrade: SynoCoreUpgrade | None = None
         self.utilisation: SynoCoreUtilization | None = None
+        self.external_usb: SynoCoreExternalUSB | None = None
 
         # Should we fetch them
         self._fetching_entities: dict[str, set[str]] = {}
         self._with_file_station = True
+        self._with_hardware = True
         self._with_information = True
         self._with_photos = True
         self._with_security = True
@@ -90,6 +93,7 @@ class SynoApi:
         self._with_system = True
         self._with_upgrade = True
         self._with_utilisation = True
+        self._with_external_usb = True
 
         self._login_future: asyncio.Future[None] | None = None
 
@@ -204,6 +208,14 @@ class SynoApi:
             self._with_file_station,
         )
 
+        # check if hardware info is available
+        try:
+            await self.dsm.hardware.update()
+        except SYNOLOGY_CONNECTION_EXCEPTIONS as ex:
+            self._with_hardware = False
+            self.dsm.reset(SynoCoreHardware.API_KEY)
+            LOGGER.debug("Disabled fetching hardware data during setup: %s", ex)
+
         await self._fetch_device_configuration()
 
         try:
@@ -260,6 +272,12 @@ class SynoApi:
         )
         self._with_information = bool(
             self._fetching_entities.get(SynoDSMInformation.API_KEY)
+        )
+        self._with_external_usb = bool(
+            self._fetching_entities.get(SynoCoreExternalUSB.API_KEY)
+        )
+        self._with_hardware = bool(
+            self._fetching_entities.get(SynoCoreHardware.API_KEY)
         )
 
         # Reset not used API, information is not reset since it's used in device_info
@@ -322,6 +340,24 @@ class SynoApi:
                 self.dsm.reset(self.utilisation)
             self.utilisation = None
 
+        if not self._with_external_usb:
+            LOGGER.debug(
+                "Disable external usb api from being updated for '%s'",
+                self._entry.unique_id,
+            )
+            if self.external_usb:
+                self.dsm.reset(self.external_usb)
+            self.external_usb = None
+
+        if not self._with_hardware:
+            LOGGER.debug(
+                "Disable hardware api from being updated for '%s'",
+                self._entry.unique_id,
+            )
+            if self.hardware:
+                self.dsm.reset(self.hardware)
+            self.hardware = None
+
     async def _fetch_device_configuration(self) -> None:
         """Fetch initial device config."""
         self.network = self.dsm.network
@@ -365,6 +401,16 @@ class SynoApi:
                 self._entry.unique_id,
             )
             self.surveillance_station = self.dsm.surveillance_station
+
+        if self._with_external_usb:
+            LOGGER.debug(
+                "Enable external usb api updates for '%s'", self._entry.unique_id
+            )
+            self.external_usb = self.dsm.external_usb
+
+        if self._with_hardware:
+            LOGGER.debug("Enable hardware api updates for '%s'", self._entry.unique_id)
+            self.hardware = self.dsm.hardware
 
     async def _syno_api_executer(self, api_call: Callable) -> None:
         """Synology api call wrapper."""

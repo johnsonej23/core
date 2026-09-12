@@ -1,8 +1,6 @@
 """Support for SmartThings Cloud."""
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, override
 
 from pysmartthings import (
     Attribute,
@@ -10,8 +8,10 @@ from pysmartthings import (
     Command,
     ComponentStatus,
     DeviceEvent,
+    DeviceHealthEvent,
     SmartThings,
 )
+from pysmartthings.models import HealthStatus
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
@@ -48,7 +48,9 @@ class SmartThingsEntity(Entity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device.device_id)},
         )
+        self._attr_available = device.online
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Subscribe to updates."""
         await super().async_added_to_hass()
@@ -61,7 +63,16 @@ class SmartThingsEntity(Entity):
                     self._update_handler,
                 )
             )
+        self.async_on_remove(
+            self.client.add_device_availability_event_listener(
+                self.device.device.device_id, self._availability_handler
+            )
+        )
         self._update_attr()
+
+    def _availability_handler(self, event: DeviceHealthEvent) -> None:
+        self._attr_available = event.status != HealthStatus.OFFLINE
+        self.async_write_ha_state()
 
     def _update_handler(self, event: DeviceEvent) -> None:
         self._internal_state[event.capability][event.attribute].value = event.value

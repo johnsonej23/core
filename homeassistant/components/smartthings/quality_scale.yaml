@@ -17,9 +17,15 @@ rules:
     status: exempt
     comment: |
       This integration does not provide additional actions.
+  docs-conditions:
+    status: exempt
+    comment: This integration does not have any conditions.
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: This integration does not have any triggers.
   entity-event-setup: done
   entity-unique-id: done
   has-entity-name: done
@@ -37,7 +43,7 @@ rules:
   docs-installation-parameters:
     status: exempt
     comment: No parameters needed during installation
-  entity-unavailable: todo
+  entity-unavailable: done
   integration-owner: done
   log-when-unavailable: todo
   parallel-updates: todo

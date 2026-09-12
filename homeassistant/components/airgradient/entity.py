@@ -3,9 +3,17 @@
 from collections.abc import Callable, Coroutine
 from typing import Any, Concatenate
 
-from airgradient import AirGradientConnectionError, AirGradientError, get_model_name
+from airgradient import (
+    AirGradientBusyError,
+    AirGradientConnectionError,
+    AirGradientError,
+    AirGradientForbiddenError,
+    AirGradientNotSupportedError,
+    get_model_name,
+)
 
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -29,6 +37,7 @@ class AirGradientEntity(CoordinatorEntity[AirGradientCoordinator]):
             model_id=measures.model,
             serial_number=coordinator.serial_number,
             sw_version=measures.firmware_version,
+            connections={(dr.CONNECTION_NETWORK_MAC, coordinator.serial_number)},
         )
 
 
@@ -47,6 +56,27 @@ def exception_handler[_EntityT: AirGradientEntity, **_P](
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="communication_error",
+                translation_placeholders={"error": str(error)},
+            ) from error
+
+        except AirGradientForbiddenError as error:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="forbidden_error",
+                translation_placeholders={"error": str(error)},
+            ) from error
+
+        except AirGradientBusyError as error:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="busy_error",
+                translation_placeholders={"error": str(error)},
+            ) from error
+
+        except AirGradientNotSupportedError as error:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="unsupported_error",
                 translation_placeholders={"error": str(error)},
             ) from error
 

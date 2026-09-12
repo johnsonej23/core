@@ -3,8 +3,9 @@
 from unittest.mock import AsyncMock
 
 from pysmartthings import Attribute, Capability, Command
+from pysmartthings.models import HealthStatus
 import pytest
-from syrupy import SnapshotAssertion
+from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.smartthings import MAIN
 from homeassistant.components.valve import DOMAIN as VALVE_DOMAIN, ValveState
@@ -12,12 +13,18 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     SERVICE_CLOSE_VALVE,
     SERVICE_OPEN_VALVE,
+    STATE_UNAVAILABLE,
     Platform,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from . import setup_integration, snapshot_smartthings_entities, trigger_update
+from . import (
+    setup_integration,
+    snapshot_smartthings_entities,
+    trigger_health_update,
+    trigger_update,
+)
 
 from tests.common import MockConfigEntry
 
@@ -56,7 +63,7 @@ async def test_valve_open_close(
     await hass.services.async_call(
         VALVE_DOMAIN,
         action,
-        {ATTR_ENTITY_ID: "valve.volvo"},
+        {ATTR_ENTITY_ID: "valve.theater_volvo"},
         blocking=True,
     )
     devices.execute_device_command.assert_called_once_with(
@@ -73,7 +80,7 @@ async def test_state_update(
     """Test state update."""
     await setup_integration(hass, mock_config_entry)
 
-    assert hass.states.get("valve.volvo").state == ValveState.CLOSED
+    assert hass.states.get("valve.theater_volvo").state == ValveState.CLOSED
 
     await trigger_update(
         hass,
@@ -84,4 +91,39 @@ async def test_state_update(
         "open",
     )
 
-    assert hass.states.get("valve.volvo").state == ValveState.OPEN
+    assert hass.states.get("valve.theater_volvo").state == ValveState.OPEN
+
+
+@pytest.mark.parametrize("device_fixture", ["virtual_valve"])
+async def test_availability(
+    hass: HomeAssistant,
+    devices: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test availability."""
+    await setup_integration(hass, mock_config_entry)
+
+    assert hass.states.get("valve.theater_volvo").state == ValveState.CLOSED
+
+    await trigger_health_update(
+        hass, devices, "612ab3c2-3bb0-48f7-b2c0-15b169cb2fc3", HealthStatus.OFFLINE
+    )
+
+    assert hass.states.get("valve.theater_volvo").state == STATE_UNAVAILABLE
+
+    await trigger_health_update(
+        hass, devices, "612ab3c2-3bb0-48f7-b2c0-15b169cb2fc3", HealthStatus.ONLINE
+    )
+
+    assert hass.states.get("valve.theater_volvo").state == ValveState.CLOSED
+
+
+@pytest.mark.parametrize("device_fixture", ["virtual_valve"])
+async def test_availability_at_start(
+    hass: HomeAssistant,
+    unavailable_device: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test unavailable at boot."""
+    await setup_integration(hass, mock_config_entry)
+    assert hass.states.get("valve.theater_volvo").state == STATE_UNAVAILABLE

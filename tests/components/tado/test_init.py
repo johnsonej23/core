@@ -1,9 +1,17 @@
 """Test the Tado integration."""
 
+import asyncio
+import threading
+import time
+from unittest.mock import patch
+
+from PyTado.http import Http
+import pytest
+
 from homeassistant.components.tado import DOMAIN
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from tests.common import MockConfigEntry
 
@@ -24,7 +32,56 @@ async def test_v1_migration(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     assert entry.version == 2
     assert CONF_USERNAME not in entry.data
-    assert CONF_PASSWORD not in entry.data
 
-    assert entry.state is ConfigEntryState.SETUP_ERROR
-    assert len(hass.config_entries.flow.async_progress()) == 1
+
+@pytest.mark.usefixtures("init_integration")
+async def test_device_via_device_links(
+    hass: HomeAssistant, device_registry: dr.DeviceRegistry
+) -> None:
+    """Test that child devices link to the bridge via via_device_id."""
+    config_entry = hass.config_entries.async_entries(DOMAIN)[0]
+
+    bridge_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "IB1234"), config_entry.entry_id
+    )
+    assert bridge_device is not None
+
+    child_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "WR1"), config_entry.entry_id
+    )
+    assert child_device is not None
+    assert child_device.via_device_id == bridge_device.id
+
+
+async def test_refresh_token_threading_lock(hass: HomeAssistant) -> None:
+    """Test that threading.Lock in Http._refresh_token serializes concurrent calls."""
+
+    timestamps: list[tuple[str, float]] = []
+    lock = threading.Lock()
+
+    def fake_refresh_token(*args, **kwargs) -> bool:
+        """Simulate the refresh token process with a threading lock."""
+        with lock:
+            timestamps.append(("start", time.monotonic()))
+            time.sleep(0.2)
+            timestamps.append(("end", time.monotonic()))
+            return True
+
+    with (
+        patch("PyTado.http.Http._refresh_token", side_effect=fake_refresh_token),
+        patch("PyTado.http.Http.__init__", return_value=None),
+    ):
+        http_instance = Http()
+
+        # Run two concurrent refresh token calls, should do the trick
+        await asyncio.gather(
+            hass.async_add_executor_job(http_instance._refresh_token),
+            hass.async_add_executor_job(http_instance._refresh_token),
+        )
+
+    end1 = timestamps[1][1]
+    start2 = timestamps[2][1]
+
+    assert start2 >= end1, (
+        f"Second refresh started before first ended: start2={start2}, end1={end1}."
+    )

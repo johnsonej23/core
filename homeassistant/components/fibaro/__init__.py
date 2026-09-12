@@ -1,7 +1,5 @@
 """Support for the Fibaro devices."""
 
-from __future__ import annotations
-
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 import logging
@@ -12,7 +10,7 @@ from pyfibaro.fibaro_client import (
     FibaroClient,
     FibaroConnectFailed,
 )
-from pyfibaro.fibaro_data_helper import read_rooms
+from pyfibaro.fibaro_data_helper import find_master_devices, read_rooms
 from pyfibaro.fibaro_device import DeviceModel
 from pyfibaro.fibaro_device_manager import FibaroDeviceManager
 from pyfibaro.fibaro_info import InfoModel
@@ -24,7 +22,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import DeviceEntry, DeviceInfo
+from homeassistant.helpers.device_registry import AnyDeviceEntry, DeviceInfo
 from homeassistant.util import slugify
 
 from .const import CONF_IMPORT_PLUGINS, DOMAIN
@@ -176,37 +174,24 @@ class FibaroController:
             platform = Platform.LIGHT
         return platform
 
-    def _create_device_info(
-        self, device: DeviceModel, devices: list[DeviceModel]
-    ) -> None:
-        """Create the device info. Unrooted entities are directly shown below the home center."""
+    def _create_device_info(self, main_device: DeviceModel) -> None:
+        """Create the device info for a main device."""
 
-        # The home center is always id 1 (z-wave primary controller)
-        if device.parent_fibaro_id <= 1:
-            return
-
-        master_entity: DeviceModel | None = None
-        if device.parent_fibaro_id == 1:
-            master_entity = device
-        else:
-            for parent in devices:
-                if parent.fibaro_id == device.parent_fibaro_id:
-                    master_entity = parent
-        if master_entity is None:
-            _LOGGER.error("Parent with id %s not found", device.parent_fibaro_id)
-            return
-
-        if "zwaveCompany" in master_entity.properties:
-            manufacturer = master_entity.properties.get("zwaveCompany")
+        if "zwaveCompany" in main_device.properties:
+            manufacturer = main_device.properties.get("zwaveCompany")
         else:
             manufacturer = None
 
-        self._device_infos[master_entity.fibaro_id] = DeviceInfo(
-            identifiers={(DOMAIN, master_entity.fibaro_id)},
+        self._device_infos[main_device.fibaro_id] = DeviceInfo(
+            identifiers={(DOMAIN, main_device.fibaro_id)},
             manufacturer=manufacturer,
-            name=master_entity.name,
-            via_device=(DOMAIN, self.hub_serial),
+            name=main_device.name,
         )
+
+    def link_main_devices_to_hub(self, via_device_id: str) -> None:
+        """Link all main devices to the hub via device."""
+        for device_info in self._device_infos.values():
+            device_info["via_device_id"] = via_device_id
 
     def get_device_info(self, device: DeviceModel) -> DeviceInfo:
         """Get the device info by fibaro device id."""
@@ -228,6 +213,10 @@ class FibaroController:
         """Return list of scenes."""
         return self._scenes
 
+    def get_all_devices(self) -> list[DeviceModel]:
+        """Return list of all fibaro devices."""
+        return self._fibaro_device_manager.get_devices()
+
     def read_fibaro_info(self) -> InfoModel:
         """Return the general info about the hub."""
         return self._fibaro_info
@@ -239,6 +228,10 @@ class FibaroController:
     def _read_devices(self) -> None:
         """Read and process the device list."""
         devices = self._fibaro_device_manager.get_devices()
+
+        for main_device in find_master_devices(devices):
+            self._create_device_info(main_device)
+
         self._device_map = {}
         last_climate_parent = None
         last_endpoint = None
@@ -258,7 +251,6 @@ class FibaroController:
                 if platform is None:
                     continue
                 device.unique_id_str = f"{slugify(self.hub_serial)}.{device.fibaro_id}"
-                self._create_device_info(device, devices)
                 self._device_map[device.fibaro_id] = device
                 _LOGGER.debug(
                     "%s (%s, %s) -> %s %s",
@@ -285,8 +277,11 @@ class FibaroController:
                 # otherwise add the first visible device in the group
                 # which is a hack, but solves a problem with FGT having
                 # hidden compatibility devices before the real device
-                if last_climate_parent != device.parent_fibaro_id or (
-                    device.has_endpoint_id and last_endpoint != device.endpoint_id
+                # Second hack is for quickapps which have parent id 0 and no children
+                if (
+                    last_climate_parent != device.parent_fibaro_id
+                    or (device.has_endpoint_id and last_endpoint != device.endpoint_id)
+                    or device.parent_fibaro_id == 0
                 ):
                     _LOGGER.debug("Handle separately")
                     self.fibaro_devices[platform].append(device)
@@ -294,7 +289,7 @@ class FibaroController:
                     last_endpoint = device.endpoint_id
                 else:
                     _LOGGER.debug("not handling separately")
-            except (KeyError, ValueError):
+            except KeyError, ValueError:
                 pass
 
 
@@ -330,7 +325,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FibaroConfigEntry) -> bo
     # register the hub device info separately as the hub has sometimes no entities
     fibaro_info = controller.read_fibaro_info()
     device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
+    hub_device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, controller.hub_serial)},
         serial_number=controller.hub_serial,
@@ -341,6 +336,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FibaroConfigEntry) -> bo
         configuration_url=controller.get_frontend_url(),
         connections={(dr.CONNECTION_NETWORK_MAC, fibaro_info.mac_address)},
     )
+    controller.link_main_devices_to_hub(hub_device.id)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -357,7 +353,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: FibaroConfigEntry) -> b
 
 
 async def async_remove_config_entry_device(
-    hass: HomeAssistant, config_entry: FibaroConfigEntry, device_entry: DeviceEntry
+    hass: HomeAssistant, config_entry: FibaroConfigEntry, device_entry: AnyDeviceEntry
 ) -> bool:
     """Remove a device entry from fibaro integration.
 

@@ -1,7 +1,5 @@
 """Provide common fixtures."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Generator
 from datetime import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -66,6 +64,7 @@ def client_fixture() -> Generator[MagicMock]:
         client.heat_state = 2
         client.lights = []
         client.pumps = []
+        client.temperature_range.client = client
         client.temperature_range.state = LowHighRange.LOW
 
         client.fault = None

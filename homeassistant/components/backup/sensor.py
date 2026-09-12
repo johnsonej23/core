@@ -1,10 +1,9 @@
 """Sensor platform for Home Assistant Backup integration."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import override
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -46,6 +45,12 @@ BACKUP_MANAGER_DESCRIPTIONS = (
         device_class=SensorDeviceClass.TIMESTAMP,
         value_fn=lambda data: data.last_successful_automatic_backup,
     ),
+    BackupSensorEntityDescription(
+        key="last_attempted_automatic_backup",
+        translation_key="last_attempted_automatic_backup",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda data: data.last_attempted_automatic_backup,
+    ),
 )
 
 
@@ -70,6 +75,7 @@ class BackupManagerSensor(BackupManagerEntity, SensorEntity):
     entity_description: BackupSensorEntityDescription
 
     @property
+    @override
     def native_value(self) -> str | datetime | None:
         """Return native value of entity."""
         return self.entity_description.value_fn(self.coordinator.data)
